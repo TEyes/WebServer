@@ -106,15 +106,46 @@ int client::chat_room(int argc, char* argv[]){
     close(sockfd);
     return 0;    
 }
+int client::cgi(int argc, char *argv[]){
+    if(argc <= 2){
+        printf("usage: %s ip_address port number\n",argv[0]);
+        return 1;
+    }
+    char *ip = argv[1];
+    int port = atoi(argv[2]);
+    struct sockaddr_in  server_address;
+    bzero(&server_address, sizeof(server_address));
+
+    server_address.sin_family = AF_INET;
+    inet_pton(AF_INET, ip, &server_address.sin_addr);
+    server_address.sin_port = htons(port);
+    int sockfd = socket(PF_INET, SOCK_STREAM, 0);
+    int connfd = connect(sockfd, (sockaddr*)&server_address, sizeof(server_address));
+    if(connfd < 0){
+        printf("connect failure.\n");
+    }
+    else{
+        close(STDOUT_FILENO);
+        dup(connfd);
+        printf("dup(connfd)\n");
+    }
+    char *info = nullptr;
+    size_t len = 200;
+    while (getline(&info, &len, fdopen(connfd, "w+"))){
+        printf("%s\n",info);
+        memset(info, '\0', 200);
+    }
+    return 0;
+}
 #ifdef CLIENT
 int main(){
     client cl;
     int argc = 3;
     char pro_name[] = "client_main";
-    char ser_ip[] = "192.168.31.238", port[] = "12322",buffe_size[] = "512";
+    char ser_ip[] = "192.168.31.238", port[] = "22390",buffe_size[] = "512";
     char* argv[] = {pro_name,ser_ip,port,buffe_size};
     printf("开始连接\n");
-    cl.chat_room(argc,argv);
+    cl.cgi(argc,argv);
     
     return 0;
 }

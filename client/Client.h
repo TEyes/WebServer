@@ -13,17 +13,22 @@
 #include<fcntl.h>
 #include<errno.h>
 #define SNDBUF_SIZE 512
+#define CLIENT
 class client
 {
 private:
     /* data */
 public:
     client();
-    int ch_tcp_buff(int argc, char* argv[]);
-    int chat_room(int argc, char* argv[]);
+    int ch_tcp_buff(int argc, char *argv[]);
+    int chat_room(int argc, char *argv[]);
+    int cgi(int argc, char *argv[]);
+    // int ffff(){
+    //     char ff[10];
+    //     bzero(ff,10);
+    // }
     ~client();
 };
-
 // client::client(/* args */)  //重复定义，因为头文件被多次包含
 // {
 // }
