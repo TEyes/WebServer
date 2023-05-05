@@ -24,6 +24,8 @@ void cgi_conn::process(){
         /*如果对方*/
         else if( ret == 0){
             removefd(m_epollfd, m_sockfd);
+            printf("process:ret == 0\n");
+            exit(0);
             break;
         }
         else{
@@ -83,24 +85,24 @@ int CGI_test(int argc,char *argv[]){
 
     int listenfd = socket(PF_INET,SOCK_STREAM,0);
     assert(listenfd >=0);
+    #ifdef DEBUG
+    int reuse = 1;
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    #endif
 
-    int reuse=1;
-    int ret = setsockopt(listenfd,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
-    cout_errno(ret, 0);
-    assert(ret == 0);
 
-    ret = bind(listenfd,(struct sockaddr*)&address, sizeof(address));
+    int ret = bind(listenfd,(struct sockaddr*)&address, sizeof(address));
     cout_errno(ret, -1);
-    assert(ret != -1);
+    assert(ret >= 0);
     
     ret =listen(listenfd,5);
     assert(ret != -1);
 
 
-    // struct sockaddr_in client;
-    // socklen_t client_addrlength = sizeof(client);
+    struct sockaddr_in client;
+    socklen_t client_addrlength = sizeof(client);
     // while(1){
-    //     int connfd = accept(sock, (struct sockaddr*)&client, &client_addrlength);
+    //     int connfd = accept(listenfd, (struct sockaddr*)&client, &client_addrlength);
     //     if(connfd < 0){
     //         printf("errno is: %d\n",errno);
     //     }
@@ -117,7 +119,7 @@ int CGI_test(int argc,char *argv[]){
     //         // close(connfd);
     //     }
     // }
-    // close(sock);
+    // close(listenfd);
 
     processpool<cgi_conn> *pool = processpool<cgi_conn>::create(listenfd);
     if(pool){
@@ -130,7 +132,8 @@ int CGI_test(int argc,char *argv[]){
 int main(){
     char ag1[] = " ";
     char ag2[] = "192.168.31.238";
-    char ag3[] = "12329";
+    // char ag3[] = "12397";
+    char ag3[] = "22390";
     char* argv[] ={ag1,ag2,ag3};
     return CGI_test(3, argv);
 }

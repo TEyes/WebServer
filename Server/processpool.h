@@ -20,6 +20,8 @@
 #include<iostream>
 
 #include"define.h"
+#include"utility.h"
+/*进程描述类*/
 class process{
 public:
     pid_t m_pid;
@@ -52,7 +54,7 @@ private:
     void run_parent();
     void run_child();
 public:
-    static processpool<T> *create(int listenfd,int process_number = 8){
+    static processpool<T> *create(int listenfd,int process_number = 1){
         if(!m_instance){
             m_instance = new processpool<T>(listenfd,process_number);
         }
@@ -111,16 +113,19 @@ processpool<T>::processpool(int listenfd, int process_number):m_listenfd(listenf
     m_sub_process = new process[process_number];
     assert(m_sub_process);
     for(int i = 0;i<process_number;++i){
+        /*子进程向父进程通知的管道*/
         int ret = socketpair(PF_UNIX,SOCK_STREAM,0,m_sub_process[i].m_pipefd);
         cout_errno(ret == 0);
         assert(ret == 0);
         m_sub_process[i].m_pid = fork();
         if(m_sub_process[i].m_pid > 0){
-            close(m_sub_process[i].m_pipefd[1]);//子进程关闭1端，1端为写入端，保留接收端
+            printf("father info : create child pid %d\n",m_sub_process[i].m_pid);
+            close(m_sub_process[i].m_pipefd[0]);
             continue;
         }
         else{
-            close(m_sub_process[i].m_pipefd[0]);//父进程关闭0端，0端为接收端，保留写入端
+            printf("child info : create child pid %d\n",m_sub_process[i].m_pid);
+            close(m_sub_process[i].m_pipefd[1]);
             m_idx = i;
             break;
         }
@@ -130,7 +135,7 @@ processpool<T>::processpool(int listenfd, int process_number):m_listenfd(listenf
 /*统一事件源
 初始化 m_epollfd
 建立sig_pipefd管道
-设置信号处理函数
+设置信号处理函数,将信号转发到sig_pipefd[1]
 */
 template< typename T>
 void processpool<T>::setup_sig_pipe(){
@@ -158,9 +163,20 @@ void processpool<T>::run(){
 /*子进程代码*/
 template< typename T >
 void processpool<T>::run_child(){
+    int out_fd = open("/mnt/data/cpp/WebServer/test/out.txt", O_RDWR | O_CREAT,
+    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+    FILE * out_fd_file = fdopen(out_fd, "a+");
+
+    fprintf(out_fd_file, "open text/out.txt is ok.\n");
+    fflush(out_fd_file);
+    close(STDOUT_FILENO);
+    dup(out_fd);
+    printf("dup _out_fd111111111\n");
+    fflush(out_fd_file);
+
     setup_sig_pipe();
     /*每个子进程通过其在进程池中的序号值m_idx找到与父进程通信的管道*/
-    int pipefd = m_sub_process[m_idx].m_pipefd[1];
+    int pipefd = m_sub_process[m_idx].m_pipefd[0];
     /*子进程需要监听管道文件描述符pipefd，因为父进程将通过它来通知子进程accept 新连接*/
     addfd(m_epollfd,pipefd);
 
@@ -175,6 +191,7 @@ void processpool<T>::run_child(){
             std::cout<<"epoll failure"<<std::endl;
             break;
         } 
+        printf("epollfd events\n");
         for(int i = 0; i<number; ++i){
             int sockfd = events[i].data.fd;
             if((sockfd == pipefd) && (events[i].events & EPOLLIN)){
@@ -192,6 +209,11 @@ void processpool<T>::run_child(){
                         std::cout<<"errno is:"<<strerror(errno)<<std::endl;
                         continue;
                     }
+
+                    char *addr_info =nullptr;
+                    change_address(client_address, addr_info, 50);
+                    printf("connect to %s\n", addr_info);
+
                     addfd(m_epollfd,connfd);
                     /*模板类T必须实现init方法，以初始化一个客户连接*/
                     users[connfd].init(m_epollfd, connfd,client_address);
@@ -226,7 +248,12 @@ void processpool<T>::run_child(){
                     }
                 }
             }
+            else if(events[i].events & EPOLLIN){
+                printf("recv message, execute process.\n");
+                users[sockfd].process();
+            }
         }
+        fflush(out_fd_file);
     }
     delete [] users;
     users = nullptr;
@@ -237,6 +264,17 @@ void processpool<T>::run_child(){
 
 template<typename T>
 void processpool<T>::run_parent(){
+    int out_fd = open("/mnt/data/cpp/WebServer/test/father_out.txt", O_RDWR | O_CREAT,
+    S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+    FILE * out_fd_file = fdopen(out_fd, "a+");
+
+    fprintf(out_fd_file, "open text/father_out.txt is ok.\n");
+    fflush(out_fd_file);
+    close(STDOUT_FILENO);
+    dup(out_fd);
+    printf("dup _out_fd\n");
+    
+
     setup_sig_pipe();
     /*父进程监听m_listenfd*/
     addfd(m_epollfd,m_listenfd);
@@ -248,6 +286,7 @@ void processpool<T>::run_parent(){
     int ret = -1;
     while(!m_stop){
         number = epoll_wait(m_epollfd, events, MAX_EVENT_NUBMER, -1);
+
         if(number < 0 && errno != EINTR){
             std::cout<<"epoll failure"<<std::endl;
             std::cout<<"errno:"<<strerror(errno)<<std::endl;
@@ -256,7 +295,7 @@ void processpool<T>::run_parent(){
         for(int i =0; i<number; ++i){
             int sockfd = events[i].data.fd;
             if(sockfd == m_listenfd){
-                /*如果由新连接到来，采用round Robin方式将其分配给一个子进程处理*/
+                /*如果由新连接到来，采用round Robin（轮询调度）方式将其分配给一个子进程处理*/
                 int i = sub_process_counter;
                 do{
                     if(m_sub_process[i].m_pid != -1){
@@ -270,9 +309,11 @@ void processpool<T>::run_parent(){
                     break;
                 }
                 sub_process_counter = (i+1)%m_process_number;
-                send(m_sub_process[i].m_pipefd[0],
+
+                send(m_sub_process[i].m_pipefd[1],
                 (char*)new_conn,sizeof(new_conn),0);
                 std::cout<<"send requeset to child(pid:"<<m_sub_process[i].m_pid<<")"<<std::endl;
+                fflush(out_fd_file);
             }
             /*下面处理父进程接收到的信号*/
             else if(sockfd == sig_pipefd[0] && events[i].events & EPOLLIN){
@@ -294,6 +335,7 @@ void processpool<T>::run_parent(){
                                             std::cout<<"child "<<i<<" join"<<" pid:"<<pid<<std::endl;
                                             close(m_sub_process[i].m_pipefd[0]);
                                             m_sub_process[i].m_pid = -1;
+                                            printf("child out \n");
                                         }
                                     }
                                 }
@@ -327,6 +369,7 @@ void processpool<T>::run_parent(){
             else continue;
 
         }
+        fflush(out_fd_file);
     }
     //close(m_listenfd)
     close(m_epollfd);

@@ -1,6 +1,7 @@
+#include<sys/uio.h>
+#include"define.h"
 #include"http_conn.h"
 #include"utility.h"
-
 const char *ok_200_title = "OK";
 const char *error_400_title = "Bad Request";
 const char *error_400_form = "Your request has bad syntax or is inherently impossbile to satisfy.\n";
@@ -10,7 +11,7 @@ const char *error_404_title = "Not Found";
 const char *error_404_form = "the reuested file was not found on this server.\n";
 const char *error_500_title = "Internal Error";
 const char *error_500_form = "There was an unusual problem serving the requested file.\n";
-const char *doc_root = "/var/www/html";
+const char *doc_root = "/mnt/data/cpp/resources";
 
 int setnonblocking(int fd){
     int old_option = fcntl(fd,F_GETFL);
@@ -48,6 +49,7 @@ int http_conn::m_epollfd = -1;
 void http_conn::close_conn(bool real_close){
     if(real_close && m_sockfd != -1){
         removefd(m_epollfd, m_sockfd);
+        printf("关闭 %d(socket) 连接。\n",m_sockfd);
         m_sockfd = -1;
         m_user_count--;
     }
@@ -56,10 +58,12 @@ void http_conn::close_conn(bool real_close){
 void http_conn::init(int sockfd, const sockaddr_in &addr){
     m_sockfd = sockfd;
     m_address = addr;
-    #ifdef DEUBG
+
+    #ifdef DEBUG
     int reuse = 1;
-    setsockopt(m_sickfd, SOL_SOCKET, &reuse, sizeof(reuse));
+    setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
     #endif
+
     addfd(m_epollfd, sockfd, true);
     m_user_count++;
 
@@ -88,7 +92,7 @@ http_conn::LINE_STATUS http_conn::parse_line(){
     char temp;
     for(;m_checked_idx < m_read_idx; ++m_checked_idx){
         temp = m_read_buf[m_checked_idx];
-        if(temp = '\r'){
+        if(temp == '\r'){
             if((m_checked_idx + 1 ) == m_read_idx){
                 return LINE_OPEN;
             }
@@ -118,7 +122,9 @@ bool http_conn::read(){
     }
     int bytes_read = 0;
     while(true){
-        bytes_read = recv(m_sockfd, m_read_buf+m_read_idx, READ_BUFFER_SIZE-m_read_idx, 0);
+        /*flag MSG_DONTWAIT and 0*/
+        // bytes_read = recv(m_sockfd, m_read_buf+m_read_idx, READ_BUFFER_SIZE-m_read_idx, 0);
+        bytes_read = recv(m_sockfd, m_read_buf+m_read_idx, READ_BUFFER_SIZE-m_read_idx, MSG_DONTWAIT);
         if(bytes_read == -1){
             if(errno == EAGAIN || errno == EWOULDBLOCK){
                 break;
@@ -136,10 +142,31 @@ bool http_conn::read(){
 
 /*解析HTTP请求行，获得请求方法，目标URL，以及HTTP版本号*/
 http_conn::HTTP_CODE http_conn::parse_request_line(char *text){
-    m_url = strpbrk(text, "\t");
+    m_url = strpbrk(text, " \t");
     if(!m_url){
         return BAD_REQUEST; 
     }
+    *m_url++ = '\0';
+
+    char *method = text;
+    if(strcasecmp(method, "GET") == 0){
+        m_method = GET;
+    }
+    else{
+        return BAD_REQUEST;
+    }
+
+    m_url += strspn(m_url, " \t");
+    m_version = strpbrk(m_url, " \t");
+    if(!m_version){
+        return BAD_REQUEST;
+    }
+    *m_version++ = '\0';
+    m_version += strspn(m_version," \t");
+    if(strcasecmp(m_version, "HTTP/1.1") != 0){
+        return BAD_REQUEST;
+    }
+
     if(strncasecmp(m_url, "http://",7) == 0){
         m_url += 7;
         m_url = strchr(m_url, '/');
@@ -166,23 +193,22 @@ http_conn::HTTP_CODE http_conn::parse_headers(char *text){
     /*处理connection头部字段*/
     else if( strncasecmp(text,"Connection:",11) == 0){
         text += 11;
-        text += strspn(text, "\t");
-        if(strcasecmp(text, "\t") == 0){
+        /*strspn 检索字符串 str1 中第一个不在字符串 str2 中出现的字符下标*/
+        text += strspn(text, " \t"); //注意空格 " \t" "\t"
+        if(strcasecmp(text, "keep-alive") == 0){
             m_linger = true;
         }
     }
     /*处理Content-Length头部字段*/
     else if(strncasecmp(text, "Content-Length:", 15) == 0){
         text += 15;
-        text += strspn(text, "\t");
-        if(strcasecmp(text, "keep-alive") == 0){
-            m_linger = true;
-        }
+        text += strspn(text, " \t");
+        m_content_length = atol(text);
     }
     /*处理host头部字段*/
-    else if(strncasecmp(text, "Host", 5) == 0){
+    else if(strncasecmp(text, "Host:", 5) == 0){
         text += 5;
-        text += strspn(text, "\t");
+        text += strspn(text, " \t");
         m_host = text;
     }
     else{
@@ -207,7 +233,7 @@ http_conn::HTTP_CODE http_conn::process_read(){
         || (line_status =parse_line()) == LINE_OK){
         text = get_line();
         m_start_line = m_checked_idx;
-        printf("got 1 hhtp line: %s\n", text);
+        printf("got 1 http line: %s\n", text);
         switch(m_check_state){
             case CHECK_STATE_REQUESTLINE:{
                 ret = parse_request_line(text);
@@ -329,9 +355,7 @@ bool http_conn::add_status_line(int status, const char *title){
 }
 
 bool http_conn::add_headers(int content_len){
-    add_content_length(content_len);
-    add_linger();
-    add_blank_line();
+    return add_content_length(content_len) && add_linger() && add_blank_line();
 }
 
 bool http_conn::add_content_length(int content_len){

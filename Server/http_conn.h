@@ -53,6 +53,8 @@ public:
     void close_conn(bool real_close = true);
     void process();
     bool read();
+    char *get_read(){return m_read_buf;}
+    sockaddr_in get_address(){return m_address;}
     bool write();
 private:
     void init();
@@ -89,7 +91,7 @@ int m_read_idx; /*标识读缓冲中已经读入的客户数据的最后一个�
 int m_checked_idx;/*当前正在分析的字符在读缓冲区的位置*/
 int m_start_line;/*当前正在解析的行的起始位置*/
 char m_write_buf[WRITE_BUFFER_SIZE];
-int m_write_idx;/*读缓冲区中待发送的字节数*/
+int m_write_idx;/*写缓冲区中待发送的字节数*/
 
 CHECK_STATE m_check_state;/*主状态机所处的状态*/
 METHOD m_method;/*请求方法*/
